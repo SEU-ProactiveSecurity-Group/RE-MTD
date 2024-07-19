@@ -165,24 +165,24 @@ class DQN:
         return dqn_loss, count
 
 
-def train_and_test(env, rnd):
+def train_and_test(env, prefix, rnd):
     k = 0
     for k in range(rnd):
         random.seed()
 
         string = str(k + 1)
         title = (
-            env.defender.type
+            env.defender.type.value
             + "-"
-            + env.attacker.type
+            + env.attacker.type.value
             + "-"
             + str(env.attacker.num)
             + "("
             + string
             + ")"
         )
-        writer_l = SummaryWriter("./log/log_{}/loss".format(title))
-        writer_r = SummaryWriter("./log/log_{}/return".format(title))
+        writer_l = SummaryWriter(f"./log/{prefix}-{title}/loss")
+        writer_r = SummaryWriter(f"./log/{prefix}-{title}/return")
 
         lr = 1e-3  # 学习速率，Q值迭代时用到
         num_episodes = 10000  # 游戏回合
@@ -216,14 +216,14 @@ def train_and_test(env, rnd):
             device,
         )  # dqn算法参数初始化
 
-        csv_dir = "./csv"
-        if not os.path.exists(csv_dir):
-            os.makedirs(csv_dir)
-        filename = f"{csv_dir}/{title}.csv"
-        csvfile = open(filename, mode="w", newline="")
-        fieldnames = ["episode", "avg_return"]
-        write = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        write.writeheader()
+        # csv_dir = "./csv"
+        # if not os.path.exists(csv_dir):
+        #     os.makedirs(csv_dir)
+        # filename = f"{csv_dir}/{title}.csv"
+        # csvfile = open(filename, mode="w", newline="")
+        # fieldnames = ["episode", "avg_return"]
+        # write = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        # write.writeheader()
 
         return_list = []
         for i in range(10):
@@ -303,12 +303,12 @@ def train_and_test(env, rnd):
                             test_return_list.append(test_episode_return)
                             # print(test_action_list)
                         avg_test_return = np.mean(test_return_list)
-                        write.writerow(
-                            {
-                                "episode": num_episodes / 10 * i + i_episode,
-                                "avg_return": avg_test_return,
-                            }
-                        )
+                        # write.writerow(
+                        #     {
+                        #         "episode": num_episodes / 10 * i + i_episode,
+                        #         "avg_return": avg_test_return,
+                        #     }
+                        # )
                         writer_r.add_scalar(
                             "training/return",
                             avg_test_return,
@@ -326,4 +326,4 @@ def train_and_test(env, rnd):
                             }
                         )
                     pbar.update(1)
-        csvfile.close()
+        # csvfile.close()

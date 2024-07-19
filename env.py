@@ -2,7 +2,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from attacker.attacker import attackerFactory
-from defender.defender import defenderFactory
+from defender.defender import Defender
+from constants import map_action_to_defence
 
 
 class Env(gym.Env):
@@ -22,13 +23,17 @@ class Env(gym.Env):
             high[i] = [100, 25600, 32767]
             low[i] = [0, 0, 30000]
 
-        self.action_space = spaces.Discrete(6)  # 动作空间的大小，一维
         self.observation_space = spaces.Box(
             low, high, shape=(self.ser_max_num, self.ser_ind), dtype=np.int64
         )  # Box（10，3）
 
+        defence_map, defence_num = map_action_to_defence(args.defender_type)
+        self.defence_map = defence_map
+        self.defence_num = defence_num
+        self.action_space = spaces.Discrete(defence_num)  # 动作空间的大小，一维
+
         self.attacker = attackerFactory(self, args.attacker_type, args.attacker_num)
-        self.defender = defenderFactory(self, args.defender_type)
+        self.defender = Defender(self, args.defender_type)
 
     def reset(self):
         # self.state = None  # 状态矩阵
@@ -61,8 +66,10 @@ class Env(gym.Env):
         self.add_ser_list2 = []  # 扩展副本产生的新服务
         self.del_ser_list = []  # 被删除副本的服务
 
-        self.defender.step(action)  # 执行动作
-        self.attacker.step(action)  # 执行动作
+        # 将 action 转换为对应的 defence_strategy
+        defence_strategy = self.defence_map[action]
+        self.defender.step(defence_strategy)  # 执行防御策略
+        self.attacker.step(defence_strategy)  # 根据防御策略执行攻击策略
 
         reward = None  # 奖励
         break_time = -0.1

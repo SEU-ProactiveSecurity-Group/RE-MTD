@@ -1,3 +1,4 @@
 log*
 csv
+output
 __pycache__

@@ -1,11 +1,12 @@
 import numpy as np
+from constants import AttackerType, DefenceStrategy
 
 
 class MCAttacker:
     def __init__(self, env, num):
         self.env = env
         self.num = num
-        self.type = "MC"
+        self.type = AttackerType.MC
 
     def reset(self):
         self.attack_ability = self.num * 256  # 攻击者的能力，能攻陷多少pod
@@ -77,17 +78,19 @@ class MCAttacker:
 
         return np.array(self.env.state, dtype=np.int64), {}
 
-    def step(self, action):
+    def step(self, defence_strategy):
         """攻击者模型"""
         # 防御动作后，攻击者流量的变化
-        if action == 0:  # 发生端口变换的服务攻击流量要回收
+        if (
+            defence_strategy == DefenceStrategy.PORT_HOPPING
+        ):  # 发生端口变换的服务攻击流量要回收
             for port in self.env.port_list:
                 if port in self.env.attack_state[:, 0]:
                     ind = self.env.get_attack_index(port)
                     self.attack_remain += self.env.attack_state[ind][4]
                     self.env.attack_state[ind][4] = 0
         elif (
-            action == 1
+            defence_strategy == DefenceStrategy.REPLICA_INCREASE
         ):  # 增加副本，攻击流量需要分配给新副本一半，需要在attack_state中添加新的服务
             for port in self.env.add_ser_list1:
                 if port in self.env.attack_state[:, 0]:
@@ -102,7 +105,7 @@ class MCAttacker:
                             self.env.attack_state[i][0] = new_port
                             self.env.attack_state[i][4] = tmp
                             break
-        elif action == 2:
+        elif defence_strategy == DefenceStrategy.REPLICA_DECREASE:
             for port in self.env.del_ser_list:
                 if port in self.env.attack_state[:, 0]:
                     ind = self.env.get_attack_index(port)
@@ -116,7 +119,7 @@ class MCAttacker:
                             break
 
         """ 侦查阶段:攻击者在第一轮建立观测矩阵,后面只需要添加或者删除port以及对应的服务;防御方执行端口变换，攻击者静默一轮，不攻击 """
-        # if action != 0:
+        # if defence_strategy != 0:
         if self.env.port_list == []:
             # 要根据port，来确定时延及其他参数
             for port in self.env.attack_state[
