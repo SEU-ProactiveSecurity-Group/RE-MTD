@@ -38,6 +38,7 @@ class Env(gym.Env):
     def reset(self):
         # self.state = None  # 状态矩阵
         # for_state = None  # 前一时刻的状态矩阵
+        # 服务状态指标：服务副本数量，服务连接数，服务端口号
         self.state = np.zeros((self.ser_max_num, self.ser_ind), dtype=np.int64)
         self.ser_num = 5
         self.steps_beyond_terminated = 0
@@ -49,7 +50,7 @@ class Env(gym.Env):
         self.defender.reset()
         self.attacker.reset()
 
-        return np.array(self.state, dtype=np.int64), {}
+        return np.array(self.state, dtype=np.int64)
 
     def step(self, action):
         err_msg = f"{action!r} ({type(action)}) invalid"
@@ -124,14 +125,14 @@ class Env(gym.Env):
         ser_con_flag = bool(np.min(self.state[:, 1]) < 0)
         terminated = bool(pod_flag or ser_con_flag or con_flag)
 
-        if terminated and self.steps_beyond_terminated < 20:
+        if terminated and self.steps_beyond_terminated < 10:
             reward -= 1
 
         self.steps_beyond_terminated += (
             1  # 限制agent和环境交互的次数，因为攻防博弈没有确定停止的点
         )
 
-        return np.array(self.state, dtype=np.int64), reward, terminated, False, {}
+        return np.array(self.state, dtype=np.int64), reward, terminated
 
     def get_state_index(self, port):
         return self.state[:, 2].tolist().index(port)

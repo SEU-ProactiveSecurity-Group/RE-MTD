@@ -1,4 +1,7 @@
 log*
+txt
 csv
 output
 __pycache__
+.env
+proxy.sh

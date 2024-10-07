@@ -1,7 +1,8 @@
 import argparse
 from argparse import Namespace
 from env import Env
-from dqn import train_and_test
+# from dqn import train_and_test
+from llm import train_and_test
 from constants import check_defender_type, check_attacker_type
 
 if __name__ == "__main__":
@@ -36,4 +37,4 @@ if __name__ == "__main__":
 
     env = Env(env_args)
     prefix = args.prefix if args.prefix else "default"
-    train_and_test(env, prefix, 1)
+    train_and_test(env, prefix, 2)
