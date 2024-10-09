@@ -34,10 +34,11 @@ class Env(gym.Env):
 
         self.attacker = attackerFactory(self, args.attacker_type, args.attacker_num)
         self.defender = Defender(self, args.defender_type)
+        self.defence_strategy = None
 
     def reset(self):
         # self.state = None  # 状态矩阵
-        # for_state = None  # 前一时刻的状态矩阵
+        # self.for_state = None  # 前一时刻的状态矩阵
         # 服务状态指标：服务副本数量，服务连接数，服务端口号
         self.state = np.zeros((self.ser_max_num, self.ser_ind), dtype=np.int64)
         self.ser_num = 5
@@ -52,30 +53,48 @@ class Env(gym.Env):
 
         return np.array(self.state, dtype=np.int64)
 
-    def step(self, action):
-        err_msg = f"{action!r} ({type(action)}) invalid"
-        assert self.action_space.contains(action), err_msg
-        assert self.state is not None, "Call reset before using step method."
-
-        self.pod_remain = self.pod_max_num - np.sum(
-            self.state[:, 0]
-        )  # 剩余pod的数量即计算资源
-        self.noaction_pen = -1  # 执行动作01234，但是没有采取实质行动的惩罚
-        self.port_pen = 0  # 端口变换发生在资源充足时的惩罚
+    def step_attack(self):
         self.port_list = []  # 记录攻击者攻击后，进行端口变换的服务的原来的port
         self.add_ser_list1 = []  # 扩展副本的服务
         self.add_ser_list2 = []  # 扩展副本产生的新服务
         self.del_ser_list = []  # 被删除副本的服务
 
+        self.attacker.step(self.defence_strategy)  # 根据防御策略执行攻击策略
+
+        return np.array(self.state, dtype=np.int64)
+
+    def step_defence(self, action):
+        err_msg = f"{action!r} ({type(action)}) invalid"
+        assert self.action_space.contains(action), err_msg
+        assert self.state is not None, "Call reset before using step method."
+
+        self.port_num = 0
+        self.noaction_pen = -1  # 执行动作01234，但是没有采取实质行动的惩罚
+        self.port_pen = 0  # 端口变换发生在资源充足时的惩罚
+        self.pod_remain = self.pod_max_num - np.sum(
+            self.state[:, 0]
+        )  # 剩余pod的数量即计算资源
+        self.for_state = self.state.copy()  # 保存前一轮state，采用copy()方法深拷贝
+        self.for_port_list = self.port_list.copy()  # 保存前一轮port_list
+        self.for_add_ser_list1 = self.add_ser_list1.copy()  # 保存前一轮add_ser_list1
+        self.for_add_ser_list2 = self.add_ser_list2.copy()  # 保存前一轮add_ser_list2
+        self.for_del_ser_list = self.del_ser_list.copy()  # 保存前一轮del_ser_list
+
         # 将 action 转换为对应的 defence_strategy
         defence_strategy = self.defence_map[action]
         self.defender.step(defence_strategy)  # 执行防御策略
-        self.attacker.step(defence_strategy)  # 根据防御策略执行攻击策略
+        self.defence_strategy = defence_strategy
 
+    def reset_step_defence(self):
+        self.state = self.for_state
+        self.port_list = self.for_port_list
+        self.add_ser_list1 = self.for_add_ser_list1
+        self.add_ser_list2 = self.for_add_ser_list2
+        self.del_ser_list = self.for_del_ser_list
+
+    def calculate_reward(self):
         reward = None  # 奖励
         break_time = -0.1
-        self.port_num = 0
-        for_state = self.state.copy()  # 保存前一轮state，采用copy()方法深拷贝
 
         # reward奖励函数
         # 第四版：将这一时刻状态与前一时刻对比，得到收益
@@ -89,17 +108,19 @@ class Env(gym.Env):
                 success_flag += 1
         sum, num = 0, 0
         for i in range(self.ser_max_num):
-            if for_state[i][0] and self.state[i][0]:
-                sum += for_state[i][1] / (
-                    for_state[i][0] * self.pod_con_num
+            if self.for_state[i][0] and self.state[i][0]:
+                sum += self.for_state[i][1] / (
+                    self.for_state[i][0] * self.pod_con_num
                 ) - self.state[i][1] / (self.state[i][0] * self.pod_con_num)
                 num += 1
         R_c = sum / num
-        R_s = (np.sum(for_state[:, 0]) - np.sum(self.state[:, 0])) / self.pod_max_num
+        R_s = (
+            np.sum(self.for_state[:, 0]) - np.sum(self.state[:, 0])
+        ) / self.pod_max_num
         R_t = break_time * self.port_num
         for_ser_num = 0
         for i in range(self.ser_max_num):
-            if for_state[i][0]:
+            if self.for_state[i][0]:
                 for_ser_num += 1
         R_a = (self.ser_num - for_ser_num) / self.ser_num
         reward = (
@@ -116,8 +137,10 @@ class Env(gym.Env):
         # 条件一：每个服务的已有连接数不能大于本身服务能承载的连接数
         con_flag = False
         for i in range(self.ser_max_num):
-            if not self.state[i][0]:
-                self.state[i][1] > self.state[i][0] * self.pod_con_num
+            if (
+                not self.state[i][0]
+                and self.state[i][1] < self.state[i][0] * self.pod_con_num
+            ):
                 con_flag = False
         # 条件二：剩余的pod数量要不小于0
         pod_flag = bool(self.pod_remain < 0)
@@ -125,14 +148,14 @@ class Env(gym.Env):
         ser_con_flag = bool(np.min(self.state[:, 1]) < 0)
         terminated = bool(pod_flag or ser_con_flag or con_flag)
 
-        if terminated and self.steps_beyond_terminated < 10:
-            reward -= 1
+        # if terminated and self.steps_beyond_terminated < 5:
+        #     reward -= 1
 
         self.steps_beyond_terminated += (
             1  # 限制agent和环境交互的次数，因为攻防博弈没有确定停止的点
         )
 
-        return np.array(self.state, dtype=np.int64), reward, terminated
+        return reward
 
     def get_state_index(self, port):
         return self.state[:, 2].tolist().index(port)
