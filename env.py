@@ -54,7 +54,7 @@ class Env(gym.Env):
 
         return np.array(self.state, dtype=np.int64)
 
-    def step(self, action):
+    def step(self, action, params):
         err_msg = f"{action!r} ({type(action)}) invalid"
         assert self.action_space.contains(action), err_msg
         assert self.state is not None, "Call reset before using step method."
@@ -63,21 +63,20 @@ class Env(gym.Env):
             self.state[:, 0]
         )  # 剩余pod的数量即计算资源
         self.noaction_pen = -1  # 执行动作01234，但是没有采取实质行动的惩罚
-        self.port_pen = 0  # 端口变换发生在资源充足时的惩罚
         self.port_list = []  # 记录攻击者攻击后，进行端口变换的服务的原来的port
         self.add_ser_list1 = []  # 扩展副本的服务
         self.add_ser_list2 = []  # 扩展副本产生的新服务
         self.del_ser_list = []  # 被删除副本的服务
+        self.port_num = 0  # 端口变换的次数
 
         # 将 action 转换为对应的 defence_strategy
         defence_strategy = self.defence_map[action]
-        self.defender.step(defence_strategy)  # 执行防御策略
+        defence_success, defence_fail_msg = self.defender.step(defence_strategy, params)  # 执行防御策略
         
         defence_state = self.state.copy()  # 保存前一时刻的状态
         
         self.attacker.step(defence_strategy)  # 根据防御策略执行攻击策略
 
-        self.port_num = 0  # 端口变换的次数
 
         # reward奖励函数
         # 第四版：将这一时刻状态与前一时刻对比，得到收益
@@ -114,7 +113,7 @@ class Env(gym.Env):
         
         print("ser_num", self.ser_num)
 
-        return self.state, defence_state, R_s, R_e, R_d, R_b
+        return self.state, defence_state, defence_success, defence_fail_msg, R_s, R_e, R_d, R_b
 
     def get_state_index(self, port):
         return self.state[:, 2].tolist().index(port)

@@ -37,4 +37,4 @@ if __name__ == "__main__":
 
     env = Env(env_args)
     prefix = args.prefix if args.prefix else "default"
-    train_and_test(env, prefix, 1)
+    train_and_test(env, prefix, 5)
