@@ -14,8 +14,8 @@ class Env(gym.Env):
         self.ser_ind = 3  # 服务副本的子指标数量
         self.ser_num = 0  # 当前服务的数量
 
-        self.con_thresh_percent = 0.75  # 正常服务连接数量占比阈值
-        self.effective_con_thresh_percent = 0.5  # 高效服务连接数量占比阈值
+        self.con_thresh_percent = 0.9  # 正常服务连接数量占比阈值
+        self.effective_con_thresh_percent = 0.3  # 高效服务连接数量占比阈值
         self.alpha, self.beta, self.gamma, self.delta = 8, 1, 0.02, 0.5  # 奖励计算权重
 
         high = np.zeros((self.ser_max_num, self.ser_ind), dtype=np.int64)
@@ -44,6 +44,7 @@ class Env(gym.Env):
         self.state = np.zeros((self.ser_max_num, self.ser_ind), dtype=np.int64)
         self.ser_num = 5
         self.steps_beyond_terminated = 0
+        self.port_num = 0  # 端口变换的次数
 
         self.attack_state = np.zeros(
             (self.ser_max_num, 5), dtype=np.int64
@@ -67,7 +68,6 @@ class Env(gym.Env):
         self.add_ser_list1 = []  # 扩展副本的服务
         self.add_ser_list2 = []  # 扩展副本产生的新服务
         self.del_ser_list = []  # 被删除副本的服务
-        self.port_num = 0  # 端口变换的次数
 
         # 将 action 转换为对应的 defence_strategy
         defence_strategy = self.defence_map[action]
@@ -80,21 +80,11 @@ class Env(gym.Env):
 
         # reward奖励函数
         # 第四版：将这一时刻状态与前一时刻对比，得到收益
-        safe_flag = 0  # 安全服务的数量
         no_effective_flag = 0  # 低效服务的数量
         danger_flag = 0  # 危险服务的数量
         for i in range(self.ser_max_num):
             if defence_state[i][0] > 0:
                 if (
-                    defence_state[i][1]
-                    <= self.con_thresh_percent * defence_state[i][0] * self.pod_con_num
-                    and defence_state[i][1]
-                    >= self.effective_con_thresh_percent
-                    * defence_state[i][0]
-                    * self.pod_con_num
-                ):
-                    safe_flag += 1
-                elif (
                     defence_state[i][1]
                     < self.effective_con_thresh_percent
                     * defence_state[i][0]
@@ -106,14 +96,13 @@ class Env(gym.Env):
                     > defence_state[i][0] * self.pod_con_num * self.con_thresh_percent
                 ):
                     danger_flag += 1
-        R_s = safe_flag / self.ser_num  # 安全服务的比例
         R_e = no_effective_flag / self.ser_num  # 低效服务的比例
         R_d = danger_flag / self.ser_num  # 危险服务的比例
         R_b = self.port_num  # 服务中断次数
         
         print("ser_num", self.ser_num)
 
-        return self.state, defence_state, defence_success, defence_fail_msg, R_s, R_e, R_d, R_b
+        return self.state, defence_state, defence_success, defence_fail_msg, R_e, R_d, R_b
 
     def get_state_index(self, port):
         return self.state[:, 2].tolist().index(port)
