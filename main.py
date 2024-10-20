@@ -21,7 +21,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--defender_type", type=str, required=True, help="Type of the defender"
-    )
+    )      
 
     # 根据命令行参数选择环境
     args = parser.parse_args()
@@ -37,4 +37,9 @@ if __name__ == "__main__":
 
     env = Env(env_args)
     prefix = args.prefix if args.prefix else "default"
-    train_and_test(env, prefix, 10)
+    num_episodes = 10
+    attack_sequence = [
+        True, True, True, True, True,
+        False, False, False, False
+    ]
+    train_and_test(env, prefix, num_episodes, attack_sequence)

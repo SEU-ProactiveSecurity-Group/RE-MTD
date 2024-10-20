@@ -14,7 +14,8 @@ class Env(gym.Env):
         self.ser_ind = 3  # 服务副本的子指标数量
         self.ser_num = 0  # 当前服务的数量
 
-        self.con_thresh_percent = 0.9  # 正常服务连接数量占比阈值
+        self.con_thresh_percent = 0.75  # 正常服务连接数量占比阈值
+        self.danger_con_thresh_percent = 0.9  # 危险服务连接数量占比阈值
         self.effective_con_thresh_percent = 0.3  # 高效服务连接数量占比阈值
         self.alpha, self.beta, self.gamma, self.delta = 8, 1, 0.02, 0.5  # 奖励计算权重
 
@@ -42,7 +43,6 @@ class Env(gym.Env):
         # self.for_state = None  # 前一时刻的状态矩阵
         # 服务状态指标：服务的副本数量，服务连接数，服务端口号
         self.state = np.zeros((self.ser_max_num, self.ser_ind), dtype=np.int64)
-        self.ser_num = 5
         self.steps_beyond_terminated = 0
         self.port_num = 0  # 端口变换的次数
 
@@ -55,7 +55,7 @@ class Env(gym.Env):
 
         return np.array(self.state, dtype=np.int64)
 
-    def step(self, action, params):
+    def step(self, action, params, do_attack):
         err_msg = f"{action!r} ({type(action)}) invalid"
         assert self.action_space.contains(action), err_msg
         assert self.state is not None, "Call reset before using step method."
@@ -75,8 +75,14 @@ class Env(gym.Env):
         
         defence_state = self.state.copy()  # 保存前一时刻的状态
         
-        self.attacker.step(defence_strategy)  # 根据防御策略执行攻击策略
-
+        if do_attack:
+            self.attacker.step(defence_strategy)    # 输入攻击流量，根据防御策略执行攻击策略
+        else:
+            self.state = np.zeros((self.ser_max_num, self.ser_ind), dtype=np.int64)
+            self.attack_state = np.zeros(
+                (self.ser_max_num, 5), dtype=np.int64
+            )
+            self.defender.reset()  # 正常用户流量，清空攻击流量
 
         # reward奖励函数
         # 第四版：将这一时刻状态与前一时刻对比，得到收益
@@ -97,15 +103,13 @@ class Env(gym.Env):
                     no_effective_flag += 1
                 elif (
                     defence_state[i][1]
-                    > defence_state[i][0] * self.pod_con_num * self.con_thresh_percent
+                    > defence_state[i][0] * self.pod_con_num * self.danger_con_thresh_percent
                 ):
                     danger_flag += 1
         R_e = no_effective_flag / self.ser_num  # 低效服务的比例
         R_d = danger_flag / self.ser_num  # 危险服务的比例
         R_b = self.port_num  # 服务中断次数
         R_c = pod_con_num / (pod_num * self.pod_con_num)  # 服务时延
-        
-        print("ser_num", self.ser_num)
 
         return self.state, defence_state, defence_success, defence_fail_msg, R_e, R_d, R_b, R_c
 

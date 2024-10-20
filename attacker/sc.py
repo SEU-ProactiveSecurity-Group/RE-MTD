@@ -15,68 +15,6 @@ class SCAttacker:
         self.target = 0  # 被攻击的目标
         self.target_port = 0  # 被攻击的服务端口
 
-        """侦查阶段:攻击者在第一轮建立观测矩阵"""
-        # 要根据port，来确定时延及其他参数
-        for port in self.env.state[
-            :, 2
-        ]:  # 再添加state中新增加的服务:只修改端口号、时延、权重
-            ind_s = self.env.get_state_index(port)
-            if port > 0:
-                for i in range(self.env.ser_max_num):
-                    if self.env.attack_state[i][0] == 0:
-                        self.env.attack_state[i][0] = self.env.state[ind_s][
-                            2
-                        ]  # 攻击者探测到的服务端口号
-                        # attack_state是int，时延需要扩大100倍才能体现差异
-                        self.env.attack_state[i][1] = (
-                            100
-                            * self.env.state[ind_s][1]
-                            / (self.env.state[ind_s][0] * self.env.pod_con_num)
-                        )  # 用服务连接数除以服务可承载连接数表示服务时延
-                        self.env.attack_state[i][3] = 0.9 * self.env.attack_state[i][
-                            1
-                        ] + 0.1 * 100 * (
-                            self.env.attack_state[i][2]
-                            / (self.env.steps_beyond_terminated + 1)
-                        )  # 计算服务被攻击的权重
-                        break
-
-        # 攻击目标选择
-        self.target = np.argmax(
-            self.env.attack_state[:, 1]
-        )  # 选择时延最高的服务（服务负载率最高）
-        self.target_port = self.env.attack_state[self.target][0]  # 被攻击的服务端口号
-        target_ser_num = self.env.get_state_index(
-            self.target_port
-        )  # 在state中找到被攻击的服务序号，因为state和attack_state是通过port连接
-
-        # 开始攻击，根据port分配攻击流量
-        if self.attack_remain <= 0:  # 攻击者没有流量就静止
-            None
-        elif self.attack_remain <= (
-            self.env.state[target_ser_num][0] * self.env.pod_con_num
-            - self.env.state[target_ser_num][1]
-        ):  # 攻击者流量不足以使服务满载，就将剩余流量全部给出
-            self.env.state[target_ser_num][1] += self.attack_remain
-            self.env.attack_state[self.target][4] += self.attack_remain
-            self.attack_remain = 0
-            self.env.attack_state[self.target][2] += 1
-        else:
-            self.env.attack_state[self.target][4] += (
-                self.env.state[target_ser_num][0] * self.env.pod_con_num
-                - self.env.state[target_ser_num][1]
-            )
-            self.attack_remain -= (
-                self.env.state[target_ser_num][0] * self.env.pod_con_num
-                - self.env.state[target_ser_num][1]
-            )
-            self.env.attack_state[self.target][2] += 1
-            self.env.state[target_ser_num][1] = (
-                self.env.state[target_ser_num][0] * self.env.pod_con_num
-            )  # 使被攻击的服务满载
-
-        return np.array(self.env.state, dtype=np.int64), {}
-
     def step(self, defence_strategy):
         """攻击者模型"""
         # 防御动作后，攻击者流量的变化

@@ -10,6 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class Action(BaseModel):
+    under_attack: bool
     action: int
     con_percent: float
     desc: str
@@ -30,28 +31,25 @@ class LLM:
         self.inital_prompts = [
             {
                 "role": "system",
-                "content": """你是一个可以在多回合ldos攻击中不断改进防御策略的安全机器人，每一回合会进行多轮的攻防博弈。
-                在每一轮攻防中，攻击者会先通过ldos攻击占用防御者的服务连接资源，然后防御者选择六种mtd策略之一来防御攻击，再通过判断防御结果是成功还是失败来优化下一轮防御动作，即一轮中先后进行两个阶段：决策、判断。
-                如果防御失败或者成功防御 max_step_num 轮，则本回合攻防结束，然后进入 反思 阶段，即回顾本回合所有轮次攻防，总结成功或失败经验，用于改进下一回合防御策略。
+                "content": """你是一个可以在多回合ldos攻击中不断改进防御策略的安全机器人，每一回合中有多轮攻防过程，每轮可能有攻击者攻击流量，也可能只有正常用户流量。
+                你需要区分这两种情况，并且在攻击者攻击时候采取动作（例如动作 0, 1, 3）防御攻击者，在只有用户流量时候，需要回收副本或节点等（例如动作 2, 4, 5），保证资源利用率。一般来说，在攻击者流量存在情况下，会导致某些副本过载，除此之外，则没有被攻击。
+                在每一轮攻防中，如果有攻击者流量，攻击者会先通过ldos攻击占用防御者的服务连接资源，然后防御者选择六种mtd策略之一来防御攻击，再通过判断防御结果是成功还是失败来优化下一轮防御动作，即一轮中先后进行两个阶段：决策、判断。
+                如果防御失败或者成功防御 max_step_num 轮，则本回合攻防结束，并且可以得到本轮防御成功或失败。
+                在每回合开始前，会先进入 反思 阶段，即回顾上回合所有轮次攻防，总结成功或失败经验，用于改进本一回合防御策略。
                 """,
             },
             {
                 "role": "system",
                 "content": """
-              在回忆阶段，你可以学习 memory_prompts 中存储的防御成功案例，根据这些经验来优化本轮防御动作。
-              """,
-            },
-            {
-                "role": "system",
-                "content": """
-                在决策阶段，你需要根据给出的当前服务状态 state，如果服务处于不正常状态，则需要选择一种防御动作 action 将服务恢复至正常，如果处于正常状态，则需要尽量减少资源消耗，具体评价指标后面介绍。
+                在决策阶段，你需要根据给出的当前服务状态 state，需要初步判断服务是否处于被攻击状态 under_attack，然后输出一个防御动作 action，以及连接数负载率阈值 con_percent，来防御攻击者流量或减少资源消耗，保证服务正常运行。
                 服务状态 state 是一个 10*3 的二维数组，表示最多有 10 个服务副本，每个副本有 3 个状态信息可以被监测，分别是副本的资源节点数量、连接数和端口号：
                     副本资源节点数量 state[0][:] 是一个 0 到 100 之间的整数，如果节点数量不为 0，则表示该服务副本存在，否则不是一个服务副本；
                     副本连接数 state[1][:] 为副本的所有节点数的连接数总和，节点连接数在 0 到 256 之间，一个副本最多有 100 个节点，所以副本连接数取值在 0 到 25600 之间；
                     副本端口号 state[2][:] 取值在 30000 到 32767 之间。
+                服务是否被攻击状态 under_attack 是一个布尔值，表示当前服务是否处于被攻击状态，如果服务处于被攻击状态，则需要选择一种防御动作 action 将服务恢复至正常，如果处于正常状态，则需要尽量减少资源消耗。
                 防御动作 action 是一个 0 到 5 之间的整数，每个整数对应一种 mtd 防御策略，有些动作带有 con_percent 参数，表示连接数负载率阈值，
                 其中，连接数负载率 = 副本连接数 / (副本节点数 * 节点最大连接数)，action 详细定义如下：
-                    0 表示采取端口跳变，即通过重新分配副本的端口号，可以清除所有副本的攻击者流量，但是受到服务中断次数限制，在防御方资源不足（例如因为副本数量达到最大或者没有剩余资源节点供分配时）情况下考虑使用；
+                    0 表示采取端口跳变，即通过重新分配副本的端口号，可以清除所有副本的攻击者流量，但是受到服务中断次数限制，在防御方资源不足（例如因为副本数量达到最大或者没有剩余资源节点供分配时）情况下考虑使用！
                     1 表示增加副本，即选定连接负载率超过 con_percent 的所有服务副本，创建一份拷贝副本，并将其所有流量的一半给拷贝副本，但是受到副本总数限制；
                     2 表示减少副本，即删除连接负载率小于 con_percent 的所有服务副本，并将删除的副本的流量平摊到各个其他副本上，提高资源利用率，但是副本数量不能小于 1；
                     3 表示副本扩容，即通过增加副本的节点数，将连接负载率高于 con_percent 的所有副本容量扩大，扩容后保证流量负载率为 con_percent，但是受到资源节点数量限制；
@@ -62,7 +60,7 @@ class LLM:
             {
                 "role": "system",
                 "content": """
-                在判断阶段，防御者首先执行动作，得到动作执行成功或失败，如果防御者资源不够用等情况可能导致动作执行失败，如果执行失败则可能下一轮需要选择执行其他动作。
+                在判断阶段，防御者首先执行动作，得到动作执行成功或失败，防御者资源不够用等情况可能导致动作执行失败，如果执行成功则说明给出的 action 和 con_percent 是有效的，如果执行失败则可能下一轮需要选择执行其他动作。
                 执行完防御动作后则可以得到此时服务状态的评价指标 R_s、R_e、R_d、R_b，你需要根据此指标来判断防御是否成功，输出成功或失败 success 和失败原因 desc：
                 评价指标的定义如下：
                     R_d 表示危险服务率，即 连接数负载率 > 0.9 的服务副本占副本总数的比例，R_d = 危险服务副本数 / 总副本数；
@@ -80,8 +78,8 @@ class LLM:
             {
                 "role": "system",
                 "content": """
-                在反思阶段，防御者执行防御动作会有是否成功的状态，如果执行成功则说明给出的 action 和 con_percent 是有效的，如果失败则需要反思 action 和 con_percent 的选择是否合理。
-                然后根据防御之后得到的服务状态 defence_state，和之前本轮防御过程和评价指标，对整个防御过程进行反思并思考下一轮操作，输出反思结果 desc。
+                在反思阶段，首先输入上回合所有攻防轮 for_prompts 次进行学习和反思，如果上回合防御成功则总结成功经验指导本回合防御决策，如果失败则反思失败原因并在本回合采取 不同 的防御策略！
+                不要纠结于每轮的防御胜利，需要规划整个回合里面的每轮的防御动作才能确保一回合的胜利！
                 """,
             },
         ]
@@ -112,15 +110,15 @@ class LLM:
             timeout=30,
         )
         parsed = completion.choices[0].message.parsed
-        print(parsed.action, parsed.con_percent)
+        print(parsed.under_attack, parsed.action, parsed.con_percent)
         prompts += [
             {
                 "role": "assistant",
-                "content": f"本轮采取的防御动作为 {parsed.action}，连接负载率阈值为 {parsed.con_percent}，原因为 {parsed.desc}",
+                "content": f"判断本轮{'处于' if parsed.under_attack else '不处于'}被攻击状态，准备采取的防御动作为 {parsed.action}，连接负载率阈值为 {parsed.con_percent}，原因为 {parsed.desc}",
             }
         ]
         self.prompts += prompts
-        return parsed.action, parsed.con_percent
+        return parsed.under_attack, parsed.action, parsed.con_percent
 
     @retry(stop=stop_after_attempt(3))
     def judge(
@@ -196,7 +194,7 @@ class LLM:
         prompts = [
             {
                 "role": "user",
-                "content": f"上回合攻防所有过程为：{str(self.for_prompts)}。",
+                "content": f"上回合攻防所有过程为 for_prompts：{str(self.for_prompts)}。",
             },
             {
                 "role": "assistant",
@@ -220,7 +218,7 @@ class LLM:
 
 # todo: 正常用户流量
 
-def train_and_test(env, prefix, num_episodes):
+def train_and_test(env, prefix, num_episodes, attack_sequence):
     agent = LLM()
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -243,19 +241,23 @@ def train_and_test(env, prefix, num_episodes):
     r_arr = []
     a_arr = []
     p_arr = []
+    att_arr = []
     txt_r = open(f"./txt/{prefix}-{title}/return.json", "w", encoding="utf-8")
     txt_a = open(f"./txt/{prefix}-{title}/action.json", "w", encoding="utf-8")
     txt_p = open(f"./txt/{prefix}-{title}/prompt.json", "w", encoding="utf-8")
+    txt_att = open(f"./txt/{prefix}-{title}/attack.json", "w", encoding="utf-8")
 
     for_step = 0
     for_episode_success = False
+
     for i in range(num_episodes):
         success = True
         step = 0
-        max_steps = 5
+        max_steps = len(attack_sequence)
         episode_return = []
         return_list = []
         action_list = []
+        attack_list = []
         state = env.reset()
         agent.reset()
         
@@ -264,7 +266,8 @@ def train_and_test(env, prefix, num_episodes):
         
         with tqdm(total=max_steps, desc=f"iteration {i}") as pbar:
             while success and (step < max_steps):
-                action, con_percent = agent.take_action(state, step)
+                do_attack = attack_sequence[step]
+                under_attack, action, con_percent = agent.take_action(state, step)
                 (
                     next_state,
                     defence_state,
@@ -274,7 +277,7 @@ def train_and_test(env, prefix, num_episodes):
                     R_d,
                     R_b,
                     R_c
-                ) = env.step(action, {"con_percent": con_percent})
+                ) = env.step(action, {"con_percent": con_percent}, do_attack)
                 # success, fail_msg = agent.judge(R_s, R_e, R_d, R_b)
                 success, fail_msg = agent.judge_fail(
                     defence_state, defence_success, defence_fail_msg, R_d, R_e, R_b, R_c
@@ -296,7 +299,8 @@ def train_and_test(env, prefix, num_episodes):
                 state = next_state
 
                 return_list.append(episode_return)
-                action_list.append(action)
+                action_list.append([action, con_percent])
+                attack_list.append([do_attack, under_attack])
 
                 pbar.set_postfix(
                     {
@@ -362,10 +366,12 @@ def train_and_test(env, prefix, num_episodes):
         r_arr.append(return_list)
         a_arr.append(action_list)
         p_arr.append(agent.prompts)
+        att_arr.append(attack_list)
 
     json.dump(r_arr, txt_r, ensure_ascii=False, indent=2)
     json.dump(a_arr, txt_a, ensure_ascii=False, indent=2)
     json.dump(p_arr, txt_p, ensure_ascii=False, indent=2)
+    json.dump(att_arr, txt_att, ensure_ascii=False, indent=2)
 
     writer_success.close()
     writer_b.close()
@@ -376,3 +382,4 @@ def train_and_test(env, prefix, num_episodes):
     txt_r.close()
     txt_a.close()
     txt_p.close()
+    txt_att.close()

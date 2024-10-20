@@ -12,6 +12,7 @@ class Defender:
         仿真环境:初始为pod总量一半的50个pod,用户总连接数定义在pod总数*256的1/2到3/4;
                 优质服务质量为小于3/4的连接总数;
         '''
+        self.env.ser_num = 5
         for i in range(self.env.ser_num):
             port = np.random.randint(30000, 32767)
             while port in self.env.state[:, 2]: 
@@ -69,8 +70,10 @@ class Defender:
                                     self.env.pod_remain -= new_pod                                    
                                     self.env.ser_num += 1
                                     break
+                        else:
+                            return False, "没有剩余的资源节点供分配"
                 if len(inf_services) == 0:
-                    return False, "没有剩余的资源节点供分配"
+                    return True, "没有超过指定负载率的副本，所以无需增加副本"
                 else:
                     return True, f"服务{inf_services}副本增加成功"
         elif defence_strategy == DefenceStrategy.REPLICA_DECREASE: # 减少副本
@@ -109,8 +112,10 @@ class Defender:
                             inf_services.append(i)
                             self.env.state[i][0] = self.env.state[i][0] + pod_incre
                             self.env.pod_remain -= pod_incre
+                        else:
+                            return False, "没有剩余的资源节点供扩展"
                 if len(inf_services) == 0:
-                    return False, "没有剩余的资源节点供扩展"
+                    return True, "没有超过指定负载率的副本，所以无需增加资源节点"
                 else:
                     return True, f"服务{inf_services}副本扩容成功"
         elif defence_strategy == DefenceStrategy.REPLICA_SHRINK: # 副本缩容
