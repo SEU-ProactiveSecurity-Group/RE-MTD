@@ -82,8 +82,12 @@ class Env(gym.Env):
         # 第四版：将这一时刻状态与前一时刻对比，得到收益
         no_effective_flag = 0  # 低效服务的数量
         danger_flag = 0  # 危险服务的数量
+        pod_num = 0  # 服务的pod数量
+        pod_con_num = 0  # 服务的连接数
         for i in range(self.ser_max_num):
             if defence_state[i][0] > 0:
+                pod_num += defence_state[i][0]
+                pod_con_num += defence_state[i][1]
                 if (
                     defence_state[i][1]
                     < self.effective_con_thresh_percent
@@ -99,10 +103,11 @@ class Env(gym.Env):
         R_e = no_effective_flag / self.ser_num  # 低效服务的比例
         R_d = danger_flag / self.ser_num  # 危险服务的比例
         R_b = self.port_num  # 服务中断次数
+        R_c = pod_con_num / (pod_num * self.pod_con_num)  # 服务连接数占比
         
         print("ser_num", self.ser_num)
 
-        return self.state, defence_state, defence_success, defence_fail_msg, R_e, R_d, R_b
+        return self.state, defence_state, defence_success, defence_fail_msg, R_e, R_d, R_b, R_c
 
     def get_state_index(self, port):
         return self.state[:, 2].tolist().index(port)

@@ -51,7 +51,7 @@ class LLM:
                     副本端口号 state[2][:] 取值在 30000 到 32767 之间。
                 防御动作 action 是一个 0 到 5 之间的整数，每个整数对应一种 mtd 防御策略，有些动作带有 con_percent 参数，表示连接数负载率阈值，
                 其中，连接数负载率 = 副本连接数 / (副本节点数 * 节点最大连接数)，action 详细定义如下：
-                    0 表示采取端口跳变，即通过重新分配副本的端口号，可以中断攻击者流量，达到短暂防御效果，但是会导致副本时延增加；
+                    0 表示采取端口跳变，即通过重新分配副本的端口号，可以中断攻击者流量，但是受到服务中断次数限制，在攻击压力较高情况下使用；
                     1 表示增加副本，即选定连接负载率超过 con_percent 的所有服务副本，创建一份拷贝副本，并将其所有流量的一半给拷贝副本，但是受到副本总数限制；
                     2 表示减少副本，即删除连接负载率小于 con_percent 的所有服务副本，并将删除的副本的流量平摊到各个其他副本上，提高资源利用率，但是副本数量不能小于 1；
                     3 表示副本扩容，即通过增加副本的节点数，将连接负载率高于 con_percent 的所有副本容量扩大，扩容后保证流量负载率为 con_percent，但是受到资源节点数量限制；
@@ -65,11 +65,16 @@ class LLM:
                 在判断阶段，防御者首先执行动作，得到动作执行成功或失败，如果防御者资源不够用等情况可能导致动作执行失败，如果执行失败则可能下一轮需要选择执行其他动作。
                 执行完防御动作后则可以得到此时服务状态的评价指标 R_s、R_e、R_d、R_b，你需要根据此指标来判断防御是否成功，输出成功或失败 success 和失败原因 desc：
                 评价指标的定义如下：
-                    R_e 表示低效服务率，即 连接数负载率 < 0.3 的服务副本占副本总数的比例，R_e = 低效服务副本数 / 总副本数；
                     R_d 表示危险服务率，即 连接数负载率 > 0.9 的服务副本占副本总数的比例，R_d = 危险服务副本数 / 总副本数；
+                    R_e 表示低效服务率，即 连接数负载率 < 0.3 的服务副本占副本总数的比例，R_e = 低效服务副本数 / 总副本数；
                     R_b 表示服务中断次数，即端口变换次数。
+                    R_c 表示服务时延，即 服务总连接数 / 服务最大连接数，公式展开来即 所有副本的 (副本节点数 * 节点连接数) 之和 / 所有副本的 (副本节点数 * 节点最大连接数) 之和。
                 防御失败条件为：
-                   R_d > 0 或 R_e > 0.7 或 R_b > 2。
+                   R_d > 0 或 R_c > 0.8 或 R_b > 4。
+                资源利用评价：
+                    在保证防御成功前提下，要求 R_e 尽可能小。
+                服务质量评价：
+                    在保证防御成功前提下，要求 R_b 尽可能小、R_c 尽可能小。
                 """,
             },
             {
@@ -117,7 +122,7 @@ class LLM:
 
     @retry(stop=stop_after_attempt(3))
     def judge(
-        self, defence_state, defence_success, defence_fail_msg, R_e, R_d, R_b
+        self, defence_state, defence_success, defence_fail_msg, R_d, R_e, R_b, R_c
     ):
         print("judge")
         prompts = [
@@ -147,26 +152,26 @@ class LLM:
         return parsed.success, parsed.desc
 
     def judge_fail(
-        self, defence_state, defence_success, defence_fail_msg, R_e, R_d, R_b
+        self, defence_state, defence_success, defence_fail_msg, R_d, R_e, R_b, R_c
     ):
         print("judge_fail")
         success, fail_msg = False, ""
-        if R_e > 0.5:
+        if R_d > 0:
             success = False
-            fail_msg = "R_e > 0.5"
-        elif R_d > 0.2:
+            fail_msg = "R_d > 0，有副本处于危险状态"
+        elif R_c > 0.8:
             success = False
-            fail_msg = "R_d > 0.2"
-        elif R_b > 2:
+            fail_msg = "R_c > 0.8，服务的时延过高"
+        elif R_b > 4:
             success = False
-            fail_msg = "R_b > 2"
+            fail_msg = "R_b > 4，服务中断次数过多"
         else:
             success = True
             fail_msg = None
         prompts = [
             {
                 "role": "user",
-                "content": f"本次执行防御动作 action {'成功' if defence_success else ('失败，原因为' + defence_fail_msg) + '，下回合可能需要采取其他动作。'}，之后服务状态变为 defence_state: {str(defence_state.tolist())}，并且得到的评价指标为：R_e={R_e}，R_d={R_d}，R_b={R_b}。",
+                "content": f"本次执行防御动作 action {'成功' if defence_success else ('失败，原因为' + defence_fail_msg) + '，下回合可能需要采取其他动作。'}，之后服务状态变为 defence_state: {str(defence_state.tolist())}，并且得到的评价指标为：R_d={R_d}，R_e={R_e}，R_b={R_b}，R_c={R_c}。",
             },
             {
                 "role": "assistant",
@@ -211,6 +216,7 @@ class LLM:
         ]
         self.prompts += prompts
 
+# todo: 正常用户流量
 
 def train_and_test(env, prefix, num_episodes):
     agent = LLM()
@@ -230,6 +236,7 @@ def train_and_test(env, prefix, num_episodes):
     writer_e = SummaryWriter(f"./log/{prefix}-{title}/e")
     writer_d = SummaryWriter(f"./log/{prefix}-{title}/d")
     writer_b = SummaryWriter(f"./log/{prefix}-{title}/b")
+    writer_c = SummaryWriter(f"./log/{prefix}-{title}/c")
     os.makedirs(f"./txt/{prefix}-{title}", exist_ok=True)
     r_arr = []
     a_arr = []
@@ -241,7 +248,7 @@ def train_and_test(env, prefix, num_episodes):
     for i in range(num_episodes):
         success = True
         step = 0
-        max_steps = 6
+        max_steps = 5
         episode_return = []
         return_list = []
         action_list = []
@@ -258,10 +265,11 @@ def train_and_test(env, prefix, num_episodes):
                     R_e,
                     R_d,
                     R_b,
+                    R_c
                 ) = env.step(action, {"con_percent": con_percent})
                 # success, fail_msg = agent.judge(R_s, R_e, R_d, R_b)
                 success, fail_msg = agent.judge_fail(
-                    defence_state, defence_success, defence_fail_msg, R_e, R_d, R_b
+                    defence_state, defence_success, defence_fail_msg, R_d, R_e, R_b, R_c
                 )
 
                 episode_return.append(
@@ -270,9 +278,10 @@ def train_and_test(env, prefix, num_episodes):
                         fail_msg,
                         defence_success,
                         defence_fail_msg,
-                        R_e,
                         R_d,
+                        R_e,
                         R_b,
+                        R_c,
                     ]
                 )
                 step += 1
@@ -305,13 +314,16 @@ def train_and_test(env, prefix, num_episodes):
         e_sum = 0
         d_sum = 0
         b_sum = 0
+        c_sum = 0
         for item in episode_return[-5:]:
             e_sum += item[4]
             d_sum += item[5]
             b_sum += item[6]
+            c_sum += item[7]
         e = e_sum / 5
         d = d_sum / 5
         b = b_sum / 5
+        c = c_sum / 5
 
         writer_success.add_scalar(
             "success",
@@ -333,6 +345,11 @@ def train_and_test(env, prefix, num_episodes):
             b,
             i,
         )
+        writer_c.add_scalar(
+            "c",
+            c,
+            i,
+        )
 
         r_arr.append(return_list)
         a_arr.append(action_list)
@@ -346,6 +363,7 @@ def train_and_test(env, prefix, num_episodes):
     writer_b.close()
     writer_d.close()
     writer_e.close()
+    writer_c.close()
 
     txt_r.close()
     txt_a.close()
