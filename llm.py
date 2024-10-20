@@ -51,7 +51,7 @@ class LLM:
                     副本端口号 state[2][:] 取值在 30000 到 32767 之间。
                 防御动作 action 是一个 0 到 5 之间的整数，每个整数对应一种 mtd 防御策略，有些动作带有 con_percent 参数，表示连接数负载率阈值，
                 其中，连接数负载率 = 副本连接数 / (副本节点数 * 节点最大连接数)，action 详细定义如下：
-                    0 表示采取端口跳变，即通过重新分配副本的端口号，可以中断攻击者流量，但是受到服务中断次数限制，在攻击压力较高情况下使用；
+                    0 表示采取端口跳变，即通过重新分配副本的端口号，可以清除所有副本的攻击者流量，但是受到服务中断次数限制，在防御方资源不足（例如因为副本数量达到最大或者没有剩余资源节点供分配时）情况下考虑使用；
                     1 表示增加副本，即选定连接负载率超过 con_percent 的所有服务副本，创建一份拷贝副本，并将其所有流量的一半给拷贝副本，但是受到副本总数限制；
                     2 表示减少副本，即删除连接负载率小于 con_percent 的所有服务副本，并将删除的副本的流量平摊到各个其他副本上，提高资源利用率，但是副本数量不能小于 1；
                     3 表示副本扩容，即通过增加副本的节点数，将连接负载率高于 con_percent 的所有副本容量扩大，扩容后保证流量负载率为 con_percent，但是受到资源节点数量限制；
@@ -86,8 +86,10 @@ class LLM:
             },
         ]
         self.prompts = []
+        self.for_prompts = []
 
     def reset(self):
+        self.for_prompts = self.prompts.copy()
         self.prompts = []
 
     @retry(stop=stop_after_attempt(3))
@@ -194,11 +196,11 @@ class LLM:
         prompts = [
             {
                 "role": "user",
-                "content": f"一回合攻防结束，经过了{step_num}轮攻防，本回合防御{'成功' if success else '失败'}。",
+                "content": f"上回合攻防所有过程为：{str(self.for_prompts)}。",
             },
             {
                 "role": "assistant",
-                "content": "【反思】 通过对本回合攻防过程进行回顾，如果成功则总结成功经验，如果失败则反思失败原因，在下回合采取更好防御策略并保证防御成功。",
+                "content": f"【反思】 上回合攻防结束，经过了{step_num}轮攻防，防御{'成功' if success else '失败'}。通过对上回合攻防过程进行反思，如果成功则总结成功经验指导本回合防御决策，如果失败则反思失败原因并在本回合采取不同的防御策略。不要纠结于每轮的防御胜利，需要规划整个回合里面的每轮的防御动作才能确保一回合的胜利！",
             },
         ]
         completion = self.client.beta.chat.completions.parse(
@@ -211,7 +213,7 @@ class LLM:
         prompts += [
             {
                 "role": "assistant",
-                "content": f"本回合防御经验为：{parsed.desc}",
+                "content": f"上回合防御经验为：{parsed.desc}",
             }
         ]
         self.prompts += prompts
@@ -245,6 +247,8 @@ def train_and_test(env, prefix, num_episodes):
     txt_a = open(f"./txt/{prefix}-{title}/action.json", "w", encoding="utf-8")
     txt_p = open(f"./txt/{prefix}-{title}/prompt.json", "w", encoding="utf-8")
 
+    for_step = 0
+    for_episode_success = False
     for i in range(num_episodes):
         success = True
         step = 0
@@ -254,6 +258,10 @@ def train_and_test(env, prefix, num_episodes):
         action_list = []
         state = env.reset()
         agent.reset()
+        
+        if i != 0:
+            agent.reflex(for_step, for_episode_success)
+        
         with tqdm(total=max_steps, desc=f"iteration {i}") as pbar:
             while success and (step < max_steps):
                 action, con_percent = agent.take_action(state, step)
@@ -303,8 +311,8 @@ def train_and_test(env, prefix, num_episodes):
             f"第{i}回合结束，总共进行了{step}轮攻防，本回合防御{'成功' if step == max_steps else '失败'}。"
         )
 
-        episode_success = step == max_steps
-        agent.reflex(step, episode_success)
+        for_step = step
+        for_episode_success = (step == max_steps)
 
         sucess_num = 0
         for item in episode_return:

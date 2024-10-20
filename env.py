@@ -103,7 +103,7 @@ class Env(gym.Env):
         R_e = no_effective_flag / self.ser_num  # 低效服务的比例
         R_d = danger_flag / self.ser_num  # 危险服务的比例
         R_b = self.port_num  # 服务中断次数
-        R_c = pod_con_num / (pod_num * self.pod_con_num)  # 服务连接数占比
+        R_c = pod_con_num / (pod_num * self.pod_con_num)  # 服务时延
         
         print("ser_num", self.ser_num)
 
