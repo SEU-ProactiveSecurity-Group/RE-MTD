@@ -39,7 +39,8 @@ if __name__ == "__main__":
     prefix = args.prefix if args.prefix else "default"
     num_episodes = 10
     attack_sequence = [
+        False, False, False, False,
         True, True, True, True, True,
-        False, False, False, False
+        False, False, False, False,
     ]
     train_and_test(env, prefix, num_episodes, attack_sequence)

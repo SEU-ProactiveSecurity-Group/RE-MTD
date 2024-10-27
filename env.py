@@ -14,7 +14,7 @@ class Env(gym.Env):
         self.ser_ind = 3  # 服务副本的子指标数量
         self.ser_num = 0  # 当前服务的数量
 
-        self.con_thresh_percent = 0.75  # 正常服务连接数量占比阈值
+        self.con_thresh_percent = 0.6  # 正常服务连接数量占比阈值
         self.danger_con_thresh_percent = 0.9  # 危险服务连接数量占比阈值
         self.effective_con_thresh_percent = 0.3  # 高效服务连接数量占比阈值
         self.alpha, self.beta, self.gamma, self.delta = 8, 1, 0.02, 0.5  # 奖励计算权重

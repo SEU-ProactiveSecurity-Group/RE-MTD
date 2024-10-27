@@ -9,8 +9,7 @@ class Defender:
         
     def reset(self):
         '''
-        仿真环境:初始为pod总量一半的50个pod,用户总连接数定义在pod总数*256的1/2到3/4;
-                优质服务质量为小于3/4的连接总数;
+        仿真环境:初始为pod总量一半的50个pod,用户总连接数定义在pod总数*256的0.5到0.6;
         '''
         self.env.ser_num = 5
         for i in range(self.env.ser_num):
@@ -73,7 +72,7 @@ class Defender:
                         else:
                             return False, "没有剩余的资源节点供分配"
                 if len(inf_services) == 0:
-                    return True, "没有超过指定负载率的副本，所以无需增加副本"
+                    return False, "没有超过指定负载率的副本，所以无需增加副本"
                 else:
                     return True, f"服务{inf_services}副本增加成功"
         elif defence_strategy == DefenceStrategy.REPLICA_DECREASE: # 减少副本
@@ -96,7 +95,10 @@ class Defender:
                 for j in range(self.env.ser_max_num):
                     if self.env.state[j][0]:
                         self.env.state[j][1] += con_num // self.env.ser_num
-                return True, f"服务{inf_services}副本减少成功"        
+                if len(inf_services) == 0:
+                    return False, "没有小于指定负载率的副本，所以无需减少副本"
+                else:
+                    return True, f"服务{inf_services}副本减少成功"        
         elif defence_strategy == DefenceStrategy.REPLICA_EXPAND: # 副本扩容
             '''
             选择大于指定负载率的服务全部进行扩容,扩容后负载率为指定负载率, 保证服务质量;
@@ -115,7 +117,7 @@ class Defender:
                         else:
                             return False, "没有剩余的资源节点供扩展"
                 if len(inf_services) == 0:
-                    return True, "没有超过指定负载率的副本，所以无需增加资源节点"
+                    return False, "没有超过指定负载率的副本，所以无需增加资源节点"
                 else:
                     return True, f"服务{inf_services}副本扩容成功"
         elif defence_strategy == DefenceStrategy.REPLICA_SHRINK: # 副本缩容
@@ -129,7 +131,10 @@ class Defender:
                     pod_decre = int(self.env.state[i][0] - self.env.state[i][1] / (self.env.pod_con_num*con_percent))
                     self.env.state[i][0] = self.env.state[i][0] - pod_decre
                     self.env.pod_remain += pod_decre
-            return True, f"服务{inf_services}副本缩容成功"
+            if len(inf_services) == 0:
+                return False, "没有小于指定负载率的副本，所以无需缩容"
+            else:
+                return True, f"服务{inf_services}副本缩容成功"
         elif defence_strategy == DefenceStrategy.NO_ACTION: # 静止动作
             return True, "不采取行动"
                 

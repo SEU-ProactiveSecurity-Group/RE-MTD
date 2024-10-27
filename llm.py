@@ -10,7 +10,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class Action(BaseModel):
-    under_attack: bool
     action: int
     con_percent: float
     desc: str
@@ -31,8 +30,8 @@ class LLM:
         self.inital_prompts = [
             {
                 "role": "system",
-                "content": """你是一个可以在多回合ldos攻击中不断改进防御策略的安全机器人，每一回合中有多轮攻防过程，每轮可能有攻击者攻击流量，也可能只有正常用户流量。
-                你需要区分这两种情况，并且在攻击者攻击时候采取动作（例如动作 0, 1, 3）防御攻击者，在只有用户流量时候，需要回收副本或节点等（例如动作 2, 4, 5），保证资源利用率。一般来说，在攻击者流量存在情况下，会导致某些副本过载，除此之外，则没有被攻击。
+                "content": """你是一个可以在多回合ldos攻击中不断改进防御策略的安全机器人，每一回合中有多轮攻防过程。
+                每轮开始时需要判断服务是否处于危险状态，如果处于正常状态（所有副本连接负载率小于0.6）则不采取动作或者回收副本节点等（例如动作 2, 4, 5），保证资源利用率；如果服务处于危险状态（某些副本连接负载量过载），则采取动作（例如动作 0, 1, 3）防御攻击者。
                 在每一轮攻防中，如果有攻击者流量，攻击者会先通过ldos攻击占用防御者的服务连接资源，然后防御者选择六种mtd策略之一来防御攻击，再通过判断防御结果是成功还是失败来优化下一轮防御动作，即一轮中先后进行两个阶段：决策、判断。
                 如果防御失败或者成功防御 max_step_num 轮，则本回合攻防结束，并且可以得到本轮防御成功或失败。
                 在每回合开始前，会先进入 反思 阶段，即回顾上回合所有轮次攻防，总结成功或失败经验，用于改进本一回合防御策略。
@@ -41,12 +40,11 @@ class LLM:
             {
                 "role": "system",
                 "content": """
-                在决策阶段，你需要根据给出的当前服务状态 state，需要初步判断服务是否处于被攻击状态 under_attack，然后输出一个防御动作 action，以及连接数负载率阈值 con_percent，来防御攻击者流量或减少资源消耗，保证服务正常运行。
+                在决策阶段，你需要根据给出的当前服务状态 state，需要初步判断服务是否处于危险状态，然后输出一个防御动作 action，以及连接数负载率阈值 con_percent，来防御攻击者流量或减少资源消耗，保证服务正常运行。
                 服务状态 state 是一个 10*3 的二维数组，表示最多有 10 个服务副本，每个副本有 3 个状态信息可以被监测，分别是副本的资源节点数量、连接数和端口号：
                     副本资源节点数量 state[0][:] 是一个 0 到 100 之间的整数，如果节点数量不为 0，则表示该服务副本存在，否则不是一个服务副本；
                     副本连接数 state[1][:] 为副本的所有节点数的连接数总和，节点连接数在 0 到 256 之间，一个副本最多有 100 个节点，所以副本连接数取值在 0 到 25600 之间；
                     副本端口号 state[2][:] 取值在 30000 到 32767 之间。
-                服务是否被攻击状态 under_attack 是一个布尔值，表示当前服务是否处于被攻击状态，如果服务处于被攻击状态，则需要选择一种防御动作 action 将服务恢复至正常，如果处于正常状态，则需要尽量减少资源消耗。
                 防御动作 action 是一个 0 到 5 之间的整数，每个整数对应一种 mtd 防御策略，有些动作带有 con_percent 参数，表示连接数负载率阈值，
                 其中，连接数负载率 = 副本连接数 / (副本节点数 * 节点最大连接数)，action 详细定义如下：
                     0 表示采取端口跳变，即通过重新分配副本的端口号，可以清除所有副本的攻击者流量，但是受到服务中断次数限制，在防御方资源不足（例如因为副本数量达到最大或者没有剩余资源节点供分配时）情况下考虑使用！
@@ -78,16 +76,18 @@ class LLM:
             {
                 "role": "system",
                 "content": """
-                在反思阶段，首先输入上回合所有攻防轮 for_prompts 次进行学习和反思，如果上回合防御成功则总结成功经验指导本回合防御决策，如果失败则反思失败原因并在本回合采取 不同 的防御策略！
-                不要纠结于每轮的防御胜利，需要规划整个回合里面的每轮的防御动作才能确保一回合的胜利！
+                在反思阶段，首先输入上回合是否防御成功，如果失败则反思失败原因和失败动作序列，然后判断上回合轮失败动作是否与之前回合失败动作重复，如果重复则警告本轮不要重复失败动作！！
+                另外给出之前所有回合的失败动作序列和成功动作序列，对于失败动作序列，需要避免重复失败动作；对于成功动作序列，需要参考成功动作序列指导本回合防御决策！！
+                最后输出反思结果 desc。
                 """,
             },
         ]
         self.prompts = []
-        self.for_prompts = []
+        self.actions = []
+        self.fail_actions = []
+        self.success_actions = []
 
     def reset(self):
-        self.for_prompts = self.prompts.copy()
         self.prompts = []
 
     @retry(stop=stop_after_attempt(3))
@@ -110,15 +110,16 @@ class LLM:
             timeout=30,
         )
         parsed = completion.choices[0].message.parsed
-        print(parsed.under_attack, parsed.action, parsed.con_percent)
+        print(parsed.action, parsed.con_percent)
+        self.actions.append([parsed.action, parsed.con_percent])
         prompts += [
             {
                 "role": "assistant",
-                "content": f"判断本轮{'处于' if parsed.under_attack else '不处于'}被攻击状态，准备采取的防御动作为 {parsed.action}，连接负载率阈值为 {parsed.con_percent}，原因为 {parsed.desc}",
+                "content": f"本轮准备采取的防御动作为 {parsed.action}，连接负载率阈值为 {parsed.con_percent}，原因为 {parsed.desc}",
             }
         ]
         self.prompts += prompts
-        return parsed.under_attack, parsed.action, parsed.con_percent
+        return parsed.action, parsed.con_percent
 
     @retry(stop=stop_after_attempt(3))
     def judge(
@@ -189,16 +190,44 @@ class LLM:
         return success, fail_msg
 
     @retry(stop=stop_after_attempt(3))
-    def reflex(self, step_num, success):
+    def reflex(self, step_num, success, fail_msg):
         print("reflex")
+
+        repeated_fail_actions = True
+        repeated_success_actions = True
+        if len(self.fail_actions) == 0:
+            repeated_fail_actions = False
+        if len(self.success_actions) == 0:
+            repeated_success_actions = False
+        if not success:
+            for a in self.fail_actions:
+                if a["actions"] != self.actions:
+                    repeated_fail_actions = False
+                    break
+            if not repeated_fail_actions:
+                self.fail_actions.append(
+                    {"actions": self.actions, "fail_reason": fail_msg}
+                )
+        else:
+            for a in self.success_actions:
+                if a != self.actions:
+                    repeated_success_actions = False
+                    break
+            if not repeated_success_actions:
+                self.success_actions.append(self.actions.copy())
+
         prompts = [
             {
                 "role": "user",
-                "content": f"上回合攻防所有过程为 for_prompts：{str(self.for_prompts)}。",
+                "content": f"上回合攻防结束，经过了{step_num}轮攻防，防御{'成功' if success else ('失败，失败原因为：' + fail_msg + '。失败动作序列为：' + str(self.actions))}。",
+            },
+            {
+                "role": "user",
+                "content": f"""上回合 { '重复了前面回合的失败动作' if repeated_fail_actions else '没有重复前面回合失败动作' }。到目前为止所有回合防御失败的动作列表为 fail_actions：{str(self.fail_actions)}，请避免本回合防御动作与之重复！！到目前为止所有回合防御成功的动作列表为 success_actions：{str(self.success_actions)}，请参考成功动作序列指导本回合防御决策。"""
             },
             {
                 "role": "assistant",
-                "content": f"【反思】 上回合攻防结束，经过了{step_num}轮攻防，防御{'成功' if success else '失败'}。通过对上回合攻防过程进行反思，如果成功则总结成功经验指导本回合防御决策，如果失败则反思失败原因并在本回合采取不同的防御策略。不要纠结于每轮的防御胜利，需要规划整个回合里面的每轮的防御动作才能确保一回合的胜利！",
+                "content": "【反思】 通过对上回合攻防过程进行反思，如果成功则总结成功经验指导本回合防御决策，如果失败则反思失败原因并在本回合采取不同的防御策略。不要纠结于每轮的防御胜利，需要规划整个回合里面的每轮的防御动作才能确保一回合的胜利！",
             },
         ]
         completion = self.client.beta.chat.completions.parse(
@@ -214,9 +243,9 @@ class LLM:
                 "content": f"上回合防御经验为：{parsed.desc}",
             }
         ]
+        self.actions = []
         self.prompts += prompts
 
-# todo: 正常用户流量
 
 def train_and_test(env, prefix, num_episodes, attack_sequence):
     agent = LLM()
@@ -241,11 +270,9 @@ def train_and_test(env, prefix, num_episodes, attack_sequence):
     r_arr = []
     a_arr = []
     p_arr = []
-    att_arr = []
     txt_r = open(f"./txt/{prefix}-{title}/return.json", "w", encoding="utf-8")
     txt_a = open(f"./txt/{prefix}-{title}/action.json", "w", encoding="utf-8")
     txt_p = open(f"./txt/{prefix}-{title}/prompt.json", "w", encoding="utf-8")
-    txt_att = open(f"./txt/{prefix}-{title}/attack.json", "w", encoding="utf-8")
 
     for_step = 0
     for_episode_success = False
@@ -253,21 +280,21 @@ def train_and_test(env, prefix, num_episodes, attack_sequence):
     for i in range(num_episodes):
         success = True
         step = 0
+        fail_msg = ""
         max_steps = len(attack_sequence)
         episode_return = []
         return_list = []
         action_list = []
-        attack_list = []
         state = env.reset()
         agent.reset()
-        
+
         if i != 0:
-            agent.reflex(for_step, for_episode_success)
-        
+            agent.reflex(for_step, for_episode_success, for_episode_fail_msg)
+
         with tqdm(total=max_steps, desc=f"iteration {i}") as pbar:
             while success and (step < max_steps):
                 do_attack = attack_sequence[step]
-                under_attack, action, con_percent = agent.take_action(state, step)
+                action, con_percent = agent.take_action(state, step)
                 (
                     next_state,
                     defence_state,
@@ -276,7 +303,7 @@ def train_and_test(env, prefix, num_episodes, attack_sequence):
                     R_e,
                     R_d,
                     R_b,
-                    R_c
+                    R_c,
                 ) = env.step(action, {"con_percent": con_percent}, do_attack)
                 # success, fail_msg = agent.judge(R_s, R_e, R_d, R_b)
                 success, fail_msg = agent.judge_fail(
@@ -300,7 +327,6 @@ def train_and_test(env, prefix, num_episodes, attack_sequence):
 
                 return_list.append(episode_return)
                 action_list.append([action, con_percent])
-                attack_list.append([do_attack, under_attack])
 
                 pbar.set_postfix(
                     {
@@ -316,7 +342,8 @@ def train_and_test(env, prefix, num_episodes, attack_sequence):
         )
 
         for_step = step
-        for_episode_success = (step == max_steps)
+        for_episode_success = step == max_steps
+        for_episode_fail_msg = fail_msg
 
         sucess_num = 0
         for item in episode_return:
@@ -366,12 +393,10 @@ def train_and_test(env, prefix, num_episodes, attack_sequence):
         r_arr.append(return_list)
         a_arr.append(action_list)
         p_arr.append(agent.prompts)
-        att_arr.append(attack_list)
 
     json.dump(r_arr, txt_r, ensure_ascii=False, indent=2)
     json.dump(a_arr, txt_a, ensure_ascii=False, indent=2)
     json.dump(p_arr, txt_p, ensure_ascii=False, indent=2)
-    json.dump(att_arr, txt_att, ensure_ascii=False, indent=2)
 
     writer_success.close()
     writer_b.close()
@@ -382,4 +407,3 @@ def train_and_test(env, prefix, num_episodes, attack_sequence):
     txt_r.close()
     txt_a.close()
     txt_p.close()
-    txt_att.close()
