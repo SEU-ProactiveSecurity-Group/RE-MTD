@@ -25,12 +25,16 @@ bash run.sh
 ## Citation
 
 ```
-@article{zhou2024resource,
+@article{zhou2025resource,
   title={Resource-Efficient Low-Rate DDoS Mitigation With Moving Target Defense in Edge Clouds},
   author={Zhou, Yuyang and Cheng, Guang and Ouyang, Zhi and Chen, Zongyao},
   journal={IEEE Transactions on Network and Service Management},
-  year={2024},
-  publisher={IEEE}
+  year={2025},
+  volume={22},
+  number={1},
+  pages={168-186},
+  publisher={IEEE},
+  doi={10.1109/TNSM.2024.3413685}
 }
 ```
 
